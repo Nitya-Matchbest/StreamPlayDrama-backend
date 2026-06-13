@@ -3,6 +3,16 @@ const { GridFSBucket } = require('mongodb');
 const { Readable } = require('stream');
 const path = require('path');
 
+/**
+ * Wraps a Buffer as a Readable stream compatible with all Node.js versions.
+ */
+function bufferToStream(buffer) {
+    const readable = new Readable();
+    readable.push(buffer);
+    readable.push(null); // Signal EOF
+    return readable;
+}
+
 // Upload image — streams buffer from multer memory storage into MongoDB GridFS
 exports.uploadImage = async (req, res) => {
     try {
@@ -24,46 +34,41 @@ exports.uploadImage = async (req, res) => {
         const bucket = new GridFSBucket(db, { bucketName: 'blogImages' });
 
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-        const filename = 'blog-image-' + uniqueSuffix + path.extname(req.file.originalname);
+        const filename = 'blog-image-' + uniqueSuffix + path.extname(req.file.originalname).toLowerCase();
 
-        // Convert buffer to readable stream and upload to GridFS
-        const readableStream = Readable.from(req.file.buffer);
-        const uploadStream = bucket.openUploadStream(filename, {
-            contentType: req.file.mimetype
-        });
-
-        readableStream.pipe(uploadStream);
-
-        uploadStream.on('error', (err) => {
-            console.error('GridFS upload error:', err);
-            if (!res.headersSent) {
-                res.status(500).json({
-                    success: false,
-                    message: 'Error saving image to database',
-                    error: err.message
-                });
-            }
-        });
-
-        uploadStream.on('finish', () => {
-            const fileId = uploadStream.id;
-            const fileUrl = `/api/image/${fileId}`;
-
-            res.json({
-                success: true,
-                message: 'Image uploaded successfully',
-                data: {
-                    filename: filename,
-                    url: fileUrl,
-                    id: fileId,
-                    size: req.file.size
+        // Upload the file buffer to GridFS using a promise
+        const fileId = await new Promise((resolve, reject) => {
+            const uploadStream = bucket.openUploadStream(filename, {
+                contentType: req.file.mimetype,
+                metadata: {
+                    originalname: req.file.originalname,
+                    uploadedAt: new Date()
                 }
             });
+
+            uploadStream.on('finish', () => resolve(uploadStream.id));
+            uploadStream.on('error', reject);
+
+            // Write the buffer directly — most reliable across all Node versions
+            uploadStream.end(req.file.buffer);
+        });
+
+        const fileUrl = `/api/image/${fileId}`;
+
+        return res.json({
+            success: true,
+            message: 'Image uploaded successfully',
+            data: {
+                filename: filename,
+                url: fileUrl,
+                id: fileId,
+                size: req.file.size
+            }
         });
 
     } catch (error) {
         console.error('Upload error:', error);
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
             message: 'Error uploading image',
             error: error.message
@@ -76,7 +81,6 @@ exports.getImage = async (req, res) => {
     try {
         const fileId = req.params.id;
 
-        // Validate ObjectId format
         if (!mongoose.Types.ObjectId.isValid(fileId)) {
             return res.status(400).json({
                 success: false,
@@ -86,7 +90,6 @@ exports.getImage = async (req, res) => {
 
         const db = mongoose.connection.db;
         const bucket = new GridFSBucket(db, { bucketName: 'blogImages' });
-
         const objectId = new mongoose.Types.ObjectId(fileId);
 
         // Check the file exists in GridFS
@@ -99,27 +102,22 @@ exports.getImage = async (req, res) => {
         }
 
         const file = files[0];
-
-        // Set proper content-type header
         res.set('Content-Type', file.contentType || 'image/jpeg');
-        res.set('Cache-Control', 'public, max-age=31536000'); // cache 1 year
+        res.set('Cache-Control', 'public, max-age=31536000');
 
-        // Stream image from GridFS to response
         const downloadStream = bucket.openDownloadStream(objectId);
         downloadStream.pipe(res);
 
         downloadStream.on('error', (err) => {
             console.error('Stream error:', err);
             if (!res.headersSent) {
-                res.status(500).json({
-                    success: false,
-                    message: 'Error streaming image'
-                });
+                res.status(500).json({ success: false, message: 'Error streaming image' });
             }
         });
+
     } catch (error) {
         console.error('Error fetching image:', error);
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
             message: 'Error fetching image',
             error: error.message
