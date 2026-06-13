@@ -1,7 +1,9 @@
 const mongoose = require('mongoose');
 const { GridFSBucket } = require('mongodb');
+const { Readable } = require('stream');
+const path = require('path');
 
-// Upload image — stored in MongoDB GridFS by multer-gridfs-storage
+// Upload image — streams buffer from multer memory storage into MongoDB GridFS
 exports.uploadImage = async (req, res) => {
     try {
         if (!req.file) {
@@ -11,20 +13,54 @@ exports.uploadImage = async (req, res) => {
             });
         }
 
-        // req.file.id is the GridFS ObjectId assigned by multer-gridfs-storage
-        const fileId = req.file.id;
-        const fileUrl = `/api/image/${fileId}`;
+        const db = mongoose.connection.db;
+        if (!db) {
+            return res.status(500).json({
+                success: false,
+                message: 'Database not connected'
+            });
+        }
 
-        res.json({
-            success: true,
-            message: 'Image uploaded successfully',
-            data: {
-                filename: req.file.filename,
-                url: fileUrl,
-                id: fileId,
-                size: req.file.size
+        const bucket = new GridFSBucket(db, { bucketName: 'blogImages' });
+
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        const filename = 'blog-image-' + uniqueSuffix + path.extname(req.file.originalname);
+
+        // Convert buffer to readable stream and upload to GridFS
+        const readableStream = Readable.from(req.file.buffer);
+        const uploadStream = bucket.openUploadStream(filename, {
+            contentType: req.file.mimetype
+        });
+
+        readableStream.pipe(uploadStream);
+
+        uploadStream.on('error', (err) => {
+            console.error('GridFS upload error:', err);
+            if (!res.headersSent) {
+                res.status(500).json({
+                    success: false,
+                    message: 'Error saving image to database',
+                    error: err.message
+                });
             }
         });
+
+        uploadStream.on('finish', () => {
+            const fileId = uploadStream.id;
+            const fileUrl = `/api/image/${fileId}`;
+
+            res.json({
+                success: true,
+                message: 'Image uploaded successfully',
+                data: {
+                    filename: filename,
+                    url: fileUrl,
+                    id: fileId,
+                    size: req.file.size
+                }
+            });
+        });
+
     } catch (error) {
         console.error('Upload error:', error);
         res.status(500).json({
