@@ -49,8 +49,10 @@ connectDB();
 // Routes
 const blogRoutes = require('./blog/routes/blogRoutes');
 const uploadRoutes = require('./blog/routes/uploadRoutes');
+const testimonialRoutes = require('./blog/routes/testimonialRoutes');
 
 app.use('/api/blogs', blogRoutes);
+app.use('/api/testimonials', testimonialRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/image', uploadRoutes);
 
