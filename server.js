@@ -50,7 +50,9 @@ connectDB();
 const blogRoutes = require('./blog/routes/blogRoutes');
 const uploadRoutes = require('./blog/routes/uploadRoutes');
 const testimonialRoutes = require('./blog/routes/testimonialRoutes');
+const authRoutes = require('./blog/routes/authRoutes');
 
+app.use('/api/auth', authRoutes);
 app.use('/api/blogs', blogRoutes);
 app.use('/api/testimonials', testimonialRoutes);
 app.use('/api/upload', uploadRoutes);
